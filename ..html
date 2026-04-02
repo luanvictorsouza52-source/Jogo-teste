@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Futebol Mobile - Mira Corrigida</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a5c2a; font-family: sans-serif; touch-action: none; }
+        canvas { display: block; background: #2ecc71; }
+        #ui { position: absolute; top: 10px; width: 100%; text-align: center; color: white; font-size: 22px; font-weight: bold; pointer-events: none; text-shadow: 2px 2px 4px #000; z-index: 5; }
+        #msg { position: absolute; top: 40%; width: 100%; text-align: center; color: yellow; font-size: 30px; font-weight: bold; display: none; text-shadow: 2px 2px 10px #000; z-index: 6; }
+        #settingsBtn { position: absolute; top: 10px; right: 10px; font-size: 24px; background: rgba(0,0,0,0.5); border: none; color: white; border-radius: 5px; padding: 5px 10px; z-index: 10; }
+        #configPanel { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; display: none; z-index: 100; box-shadow: 0 0 20px rgba(0,0,0,0.5); width: 250px; }
+        #configPanel button { display: block; width: 100%; margin: 10px 0; padding: 12px; font-size: 16px; border-radius: 5px; border: 1px solid #ccc; background: #eee; }
+        #joyArea { position: absolute; bottom: 50px; left: 50px; display: none; }
+        .joystick-base { width: 120px; height: 120px; background: rgba(255,255,255,0.2); border-radius: 50%; border: 2px solid rgba(255,255,255,0.4); position: relative; }
+        .joystick-stick { width: 60px; height: 60px; background: rgba(255,255,255,0.7); border-radius: 50%; position: absolute; top: 30px; left: 30px; }
+        #arrowsArea { position: absolute; bottom: 40px; left: 40px; display: none; grid-template-areas: ". up ." "left . right" ". down ."; gap: 10px; }
+        .arrow-btn { width: 60px; height: 60px; background: rgba(255,255,255,0.3); border: 2px solid white; color: white; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">GOLS: <span id="score">0</span></div>
+    <div id="msg">TIRO DE META!</div>
+    <button id="settingsBtn">⚙️</button>
+
+    <div id="configPanel">
+        <h3 style="margin-top:0; text-align:center;">Controles</h3>
+        <button onclick="setControl('joy')">Analógico</button>
+        <button onclick="setControl('arrows')">Setas</button>
+        <button onclick="setControl('touch')">Arraste Direto</button>
+        <button onclick="closeConfig()" style="background: #27ae60; color: white;">FECHAR</button>
+    </div>
+
+    <div id="joyArea">
+        <div id="joyBase" class="joystick-base"><div id="joyStick" class="joystick-stick"></div></div>
+    </div>
+
+    <div id="arrowsArea">
+        <div class="arrow-btn" style="grid-area: up" id="btnUp">▲</div>
+        <div class="arrow-btn" style="grid-area: left" id="btnLeft">◀</div>
+        <div class="arrow-btn" style="grid-area: right" id="btnRight">▶</div>
+        <div class="arrow-btn" style="grid-area: down" id="btnDown">▼</div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const msgEl = document.getElementById("msg");
+    
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let score = 0;
+    let controlType = 'joy'; 
+    let inputX = 0, inputY = 0;
+    let isResetting = false;
+
+    const player = { x: canvas.width/2, y: canvas.height - 150, r: 22, speed: 6, color: "#3498db" };
+    const ball = { x: canvas.width/2, y: canvas.height/2, r: 12, dx: 0, dy: 0, friction: 0.96 };
+    const goal = { x: canvas.width/4, y: 20, w: canvas.width/2, h: 10 };
+    const gk = { x: canvas.width/2, y: 60, r: 20, speed: 3.5, color: "#f1c40f" };
+
+    function setControl(type) {
+        controlType = type;
+        document.getElementById('joyArea').style.display = type === 'joy' ? 'block' : 'none';
+        document.getElementById('arrowsArea').style.display = type === 'arrows' ? 'grid' : 'none';
+    }
+    document.getElementById('settingsBtn').onclick = () => document.getElementById('configPanel').style.display = 'block';
+    function closeConfig() { document.getElementById('configPanel').style.display = 'none'; }
+
+    // Analogico
+    const joyBase = document.getElementById("joyBase");
+    const joyStick = document.getElementById("joyStick");
+    const handleJoy = (e) => {
+        const rect = joyBase.getBoundingClientRect();
+        const touch = e.touches[0];
+        const dx = touch.clientX - (rect.left + rect.width/2);
+        const dy = touch.clientY - (rect.top + rect.height/2);
+        const dist = Math.min(Math.hypot(dx, dy), 60);
+        const angle = Math.atan2(dy, dx);
+        inputX = Math.cos(angle) * (dist / 60);
+        inputY = Math.sin(angle) * (dist / 60);
+        joyStick.style.transform = `translate(${inputX * 40}px, ${inputY * 40}px)`;
+        e.preventDefault();
+    };
+    joyBase.addEventListener("touchstart", handleJoy);
+    joyBase.addEventListener("touchmove", handleJoy);
+    joyBase.addEventListener("touchend", () => { joyStick.style.transform = `translate(0,0)`; inputX = 0; inputY = 0; });
+
+    // Setas
+    const setupArrow = (id, x, y) => {
+        const b = document.getElementById(id);
+        b.ontouchstart = (e) => { inputX = x; inputY = y; e.preventDefault(); };
+        b.ontouchend = () => { inputX = 0; inputY = 0; };
+    };
+    setupArrow("btnUp", 0, -1); setupArrow("btnDown", 0, 1); setupArrow("btnLeft", -1, 0); setupArrow("btnRight", 1, 0);
+
+    // Toque Direto
+    canvas.addEventListener("touchmove", (e) => {
+        if (controlType === 'touch' && !isResetting) {
+            const touch = e.touches[0];
+            // No modo toque, calculamos a direção baseada na posição anterior
+            let moveX = touch.clientX - player.x;
+            let moveY = touch.clientY - player.y;
+            // Normalizamos para simular o inputX e inputY do analógico
+            let dist = Math.hypot(moveX, moveY);
+            if (dist > 0) {
+                inputX = moveX / 10;
+                inputY = moveY / 10;
+            }
+            player.x = touch.clientX; 
+            player.y = touch.clientY;
+        }
+    });
+
+    function tiroDeMeta() {
+        if (isResetting) return;
+        isResetting = true;
+        msgEl.style.display = "block";
+        ball.dx = 0; ball.dy = 0;
+        setTimeout(() => {
+            ball.x = gk.x; ball.y = gk.y + 30;
+            setTimeout(() => {
+                ball.dy = 12; ball.dx = (Math.random() - 0.5) * 4;
+                msgEl.style.display = "none";
+                isResetting = false;
+            }, 500);
+        }, 500);
+    }
+
+    function update() {
+        if (isResetting) return;
+
+        if (controlType !== 'touch') {
+            player.x += inputX * player.speed;
+            player.y += inputY * player.speed;
+        }
+
+        // --- FÍSICA DE COLISÃO COM MIRA CORRIGIDA ---
+        let dx = ball.x - player.x;
+        let dy = ball.y - player.y;
+        let distance = Math.hypot(dx, dy);
+        let minDist = player.r + ball.r;
+
+        if (distance < minDist) {
+            let angle = Math.atan2(dy, dx);
+            
+            // CORREÇÃO: Se o jogador está chutando para cima (em direção ao gol)
+            // e a bola está na frente dele, forçamos o ângulo para o centro do gol
+            if (dy < 0) { // Indo para cima
+                let goalCenterX = goal.x + goal.w / 2;
+                let angleToGoal = Math.atan2(20 - ball.y, goalCenterX - ball.x);
+                // Mescla o ângulo real com o ângulo do gol (80% mira assistida)
+                angle = angle * 0.2 + angleToGoal * 0.8;
+            }
+
+            let overlap = minDist - distance;
+            ball.x += Math.cos(angle) * overlap;
+            ball.y += Math.sin(angle) * overlap;
+            
+            let pwr = 5 + (Math.hypot(inputX, inputY) * 15);
+            if (controlType === 'touch') pwr = 14; 
+
+            ball.dx = Math.cos(angle) * pwr;
+            ball.dy = Math.sin(angle) * pwr;
+        }
+
+        // IA Goleiro
+        const targetGkX = Math.max(goal.x, Math.min(ball.x, goal.x + goal.w));
+        gk.x += (targetGkX - gk.x) * 0.12;
+
+        let dgk = Math.hypot(ball.x - gk.x, ball.y - gk.y);
+        if (dgk < gk.r + ball.r) {
+            ball.dy = 10;
+            ball.dx += (Math.random() - 0.5) * 6;
+        }
+
+        ball.x += ball.dx; ball.y += ball.dy;
+        ball.dx *= ball.friction; ball.dy *= ball.friction;
+
+        if (ball.x < ball.r) { ball.x = ball.r; ball.dx *= -1; }
+        if (ball.x > canvas.width - ball.r) { ball.x = canvas.width - ball.r; ball.dx *= -1; }
+        if (ball.y > canvas.height - ball.r) { ball.y = canvas.height - ball.r; ball.dy *= -1; }
+
+        if (ball.y < ball.r) {
+            if (ball.x > goal.x && ball.x < goal.x + goal.w) {
+                score++;
+                document.getElementById("score").innerText = score;
+                ball.x = canvas.width/2; ball.y = canvas.height/2;
+                ball.dx = 0; ball.dy = 0;
+            } else {
+                tiroDeMeta();
+            }
+        }
+
+        player.x = Math.max(player.r, Math.min(canvas.width - player.r, player.x));
+        player.y = Math.max(player.r, Math.min(canvas.height - player.r, player.y));
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = "rgba(255,255,255,0.6)"; ctx.lineWidth = 3;
+        ctx.strokeRect(5, 5, canvas.width-10, canvas.height-10);
+        ctx.beginPath();
+        ctx.moveTo(0, canvas.height/2); ctx.lineTo(canvas.width, canvas.height/2);
+        ctx.stroke();
+
+        ctx.fillStyle = "white";
+        ctx.fillRect(goal.x, 0, goal.w, goal.h + 10);
+
+        drawCircle(player.x, player.y, player.r, player.color);
+        drawCircle(gk.x, gk.y, gk.r, gk.color);
+        drawCircle(ball.x, ball.y, ball.r, "white", true);
+
+        update();
+        requestAnimationFrame(draw);
+    }
+
+    function drawCircle(x, y, r, color, isBall = false) {
+        ctx.fillStyle = color; ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = "black"; ctx.lineWidth = 2; ctx.stroke();
+        if(isBall) {
+            ctx.beginPath(); ctx.moveTo(x-r,y); ctx.lineTo(x+r,y); ctx.stroke();
+        }
+    }
+
+    setControl('joy');
+    draw();
+</script>
+</body>
+</html>
